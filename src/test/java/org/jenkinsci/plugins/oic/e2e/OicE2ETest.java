@@ -1,22 +1,19 @@
 package org.jenkinsci.plugins.oic.e2e;
 
 import dasniko.testcontainers.keycloak.KeycloakContainer;
-import jakarta.ws.rs.core.Response;
 import java.util.Arrays;
 import java.util.stream.Collectors;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.keycloak.admin.client.Keycloak;
-import org.keycloak.admin.client.resource.RealmResource;
+import org.keycloak.admin.client.resource.GroupResource;
 import org.keycloak.representations.idm.GroupRepresentation;
 import org.keycloak.representations.idm.RealmRepresentation;
 import org.keycloak.representations.idm.UserRepresentation;
 
 import static org.hamcrest.Matchers.containsInAnyOrder;
-import static org.hamcrest.Matchers.either;
 import static org.hamcrest.Matchers.is;
-import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertThat;
 
 public class OicE2ETest {
@@ -24,8 +21,7 @@ public class OicE2ETest {
     private static final String REALM = "test-realm";
 
     @Rule
-    public KeycloakContainer keycloak = new KeycloakContainer().useTls()/*.withRealmImportFile("org/jenkinsci/plugins"
-                                                                                             + "/oic/e2e/realm.json")*/;
+    public KeycloakContainer keycloak = new KeycloakContainer().useTls();
 
     @Before
     public void setUpKeyloak() {
@@ -37,17 +33,22 @@ public class OicE2ETest {
 
             keycloakAdmin.realms().create(testRealm);
 
-            // Add groups
+            // Add groups and subgroups
+            GroupRepresentation employees = new GroupRepresentation();
+            employees.setName("employees");
+            keycloakAdmin.realm(REALM).groups().add(employees);
+
+            String groupId = keycloakAdmin.realm(REALM).groups().groups().get(0).getId();
+
             GroupRepresentation devs = new GroupRepresentation();
             devs.setName("devs");
+            GroupResource group = keycloakAdmin.realm(REALM).groups().group(groupId);
+            group.subGroup(devs);
 
             GroupRepresentation sales = new GroupRepresentation();
             sales.setName("sales");
-
-            GroupRepresentation employees = new GroupRepresentation();
-            employees.setName("employees");
-            employees.setSubGroups(Arrays.asList(devs, sales));
-            keycloakAdmin.realm(REALM).groups().add(employees);
+            group = keycloakAdmin.realm(REALM).groups().group(groupId);
+            group.subGroup(sales);
 
             UserRepresentation bob = new UserRepresentation();
             bob.setEmail("bob@acme.org");
@@ -66,11 +67,21 @@ public class OicE2ETest {
             keycloakAdmin.realm(REALM).users().create(john);
 
             // Assert that the realm is properly created
-            RealmResource realm = keycloakAdmin.realm(REALM);
-            assertThat("groups are created", realm.groups().groups().stream().map(GroupRepresentation::getName).collect(Collectors.toList()),
-                       containsInAnyOrder("employees", "devs", "sales"));
-            assertThat("users are created", realm.users().list().stream().map(UserRepresentation::getUsername).collect(Collectors.toList()),
+            assertThat("group is created", keycloakAdmin.realm(REALM).groups().groups().get(0).getName(), is("employees"));
+            GroupResource g = keycloakAdmin.realm(REALM).groups().group(groupId);
+            assertThat("subgroups are created",
+                       g.getSubGroups(0, 2, true).stream().map(GroupRepresentation::getName).collect(Collectors.toList()),
+                       containsInAnyOrder("devs", "sales"));
+            assertThat("users are created", keycloakAdmin.realm(REALM).users().list().stream().map(UserRepresentation::getUsername).collect(Collectors.toList()),
                        containsInAnyOrder("bob", "john"));
+            String bobId = keycloakAdmin.realm(REALM).users().searchByUsername("bob", true).get(0).getId();
+            assertThat("User bob with the correct groups",
+                       keycloakAdmin.realm(REALM).users().get(bobId).groups().stream().map(GroupRepresentation::getPath).collect(Collectors.toList()),
+                       containsInAnyOrder("/employees", "/employees/devs"));
+            String johnId = keycloakAdmin.realm(REALM).users().searchByUsername("john", true).get(0).getId();
+            assertThat("User john with the correct groups",
+                       keycloakAdmin.realm(REALM).users().get(johnId).groups().stream().map(GroupRepresentation::getPath).collect(Collectors.toList()),
+                       containsInAnyOrder("/employees", "/employees/sales"));
         }
     }
 
